@@ -76,7 +76,7 @@ def main():
     parser.add_argument("--patterns-test", default=str(DATA_DIR / "LI-Small_Patterns.txt"))
     parser.add_argument("--epsilon", type=float, nargs="+", default=EPSILON_LIST)
     parser.add_argument("--nrows", type=int, default=None)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
     device = torch.device(args.device)

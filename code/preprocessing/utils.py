@@ -165,7 +165,7 @@ _DROP_COLS = {
     "Timestamp", "From Bank", "Account", "To Bank", "Account.1",
     "Amount Received", "Receiving Currency", "Amount Paid",
     "Payment Currency", "Payment Format",
-    "Is Laundering", "pattern_type",
+    "Is Laundering", "pattern_type", "group_id",
     "amount_ratio", "amount_diff",
 }
 
@@ -203,6 +203,21 @@ def grouped_train_test_split(*arrays, groups, test_size, random_state=None):
         out.append(a[train_idx])
         out.append(a[test_idx])
     return out
+
+
+def select_f1_threshold(y: np.ndarray, scores: np.ndarray) -> float:
+    """F1-maximizing decision threshold via the precision-recall curve.
+
+    O(n log n) vs. an O(n) linear threshold scan. Callers MUST pass a
+    held-out validation split here and apply the returned threshold to
+    the test set -- selecting the threshold directly on the test set
+    optimistically biases every downstream reported metric.
+    """
+    from sklearn.metrics import precision_recall_curve
+    prec, rec, thresh = precision_recall_curve(y, scores)
+    f1 = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0.0)
+    best_idx = int(np.argmax(f1))
+    return float(thresh[best_idx]) if best_idx < len(thresh) else 0.5
 
 
 def load_and_prepare(trans_path: Path, patterns_path: Path, nrows=None):

@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--nrows", type=int, default=None)
     parser.add_argument("--fast", action="store_true",
                         help="Load from pre-computed features.parquet instead of raw CSV.")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--lr", type=float, default=None,
                         help="Override learning rate for MLP (default: from config).")
     args = parser.parse_args()
@@ -67,8 +67,9 @@ def main():
     if args.model in ("mlp", "both"):
         print("\n--- Centralized MLP ---")
         model, val_f1 = train_mlp(X_train, y_train, X_val, y_val, epochs=args.epochs, device_str=args.device, lr=args.lr)
-        metrics = evaluate_model(model, X_test, y_test, device_str=args.device)
-        print(f"  F1={metrics['f1_macro']:.4f}  AUC={metrics['auc']:.4f}")
+        val_metrics = evaluate_model(model, X_val, y_val, device_str=args.device)
+        metrics = evaluate_model(model, X_test, y_test, device_str=args.device, threshold=val_metrics["threshold"])
+        print(f"  F1={metrics['f1_macro']:.4f}  AUC={metrics['auc']:.4f}  (threshold={val_metrics['threshold']:.4f}, selected on val)")
         results["mlp"] = {"f1_macro": metrics["f1_macro"], "auc": metrics["auc"], "epsilon": "inf"}
 
         pattern_f1 = {}
@@ -87,8 +88,10 @@ def main():
     if args.model in ("xgboost", "both"):
         print("\n--- Centralized XGBoost ---")
         clf = train_xgboost(X_train, y_train)
-        metrics_xgb = evaluate_xgboost(clf, X_test, y_test)
-        print(f"  F1={metrics_xgb['f1_macro']:.4f}  AUC={metrics_xgb['auc']:.4f}")
+        val_metrics_xgb = evaluate_xgboost(clf, X_val, y_val)
+        metrics_xgb = evaluate_xgboost(clf, X_test, y_test, threshold=val_metrics_xgb["threshold"])
+        print(f"  F1={metrics_xgb['f1_macro']:.4f}  AUC={metrics_xgb['auc']:.4f}  "
+              f"(threshold={val_metrics_xgb['threshold']:.4f}, selected on val)")
         results["xgboost"] = {"f1_macro": metrics_xgb["f1_macro"], "auc": metrics_xgb["auc"]}
 
         pattern_f1_xgb = {}

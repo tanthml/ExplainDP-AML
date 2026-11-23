@@ -62,8 +62,23 @@ def load_model(model_kwargs, path: Path, device):
     return model
 
 
-def per_pattern_recall(model, X_test, y_test, pt_test, device):
-    """Per-pattern detection recall under one shared, globally-optimised threshold.
+def load_locked_threshold(results_path: Path):
+    """Read the validation-selected decision threshold saved by exp2/exp3
+    alongside that model's checkpoint, so per-pattern recall is reported
+    using the same threshold as Table 1's test-set numbers -- never a
+    threshold re-selected on the test set itself."""
+    if not results_path.exists():
+        return None
+    with open(results_path) as f:
+        data = json.load(f)
+    per_seed = data.get("per_seed")
+    if per_seed:
+        return per_seed[0]["threshold"]
+    return data.get("threshold")  # back-compat with pre-multi-seed result files
+
+
+def per_pattern_recall(model, X_test, y_test, pt_test, device, threshold):
+    """Per-pattern detection recall under one shared, validation-selected threshold.
 
     Every per-pattern subset (pt_test == pattern) contains ONLY illicit
     transactions -- legitimate transactions are always labeled "none". Macro-F1
@@ -73,20 +88,18 @@ def per_pattern_recall(model, X_test, y_test, pt_test, device):
     precision/recall tradeoff because there are no true negatives to be wrong
     about within the subset. Recall (fraction of that pattern's illicit
     transactions flagged) is the metric that is actually well-defined here.
+
+    `threshold` must come from load_locked_threshold() (selected on validation
+    by exp2/exp3), consistent with Table 1's test-set evaluation -- selecting
+    it here directly on the test set would leak test labels into the metric.
     """
-    from sklearn.metrics import precision_recall_curve
     model.eval()
     with torch.no_grad():
         logits = model(torch.tensor(X_test, dtype=torch.float32).to(device))
         probs = torch.softmax(logits, dim=1).cpu().numpy()
 
     scores = probs[:, 1]
-    # Use global threshold-optimized predictions (consistent with Table 1 evaluation).
-    prec, rec, thresh = precision_recall_curve(y_test, scores)
-    f1_cls1 = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0.0)
-    best_idx = int(np.argmax(f1_cls1))
-    best_thresh = float(thresh[best_idx]) if best_idx < len(thresh) else 0.5
-    preds = (scores >= best_thresh).astype(int)
+    preds = (scores >= threshold).astype(int)
 
     out = {}
     for pt in np.unique(pt_test):
@@ -130,7 +143,7 @@ def main():
     parser.add_argument("--nrows", type=int, default=None)
     parser.add_argument("--fast", action="store_true",
                         help="Load from pre-computed features.parquet instead of raw CSV.")
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -154,23 +167,33 @@ def main():
     model_kwargs = {"input_dim": X.shape[1], "hidden_dims": HIDDEN_DIMS, "dropout": DROPOUT}
     all_results = {}
 
-    model_map = {"inf (FedAvg)": RESULTS_DIR / "models" / "fedavg.pt"}
+    model_map = {
+        "inf (FedAvg)": (RESULTS_DIR / "models" / "fedavg.pt", RESULTS_DIR / "tables" / "exp2_fedavg.json"),
+    }
     for eps in sorted(args.epsilon, reverse=True):
         # exp3_dp_fl.py always parses --epsilon as float before building its
         # save filename, so the tag must match that (e.g. 50 -> "50_0"),
         # regardless of whether eps arrived here as an int (config default) or
         # a CLI-parsed float.
         tag = str(float(eps)).replace(".", "_")
-        model_map[str(eps)] = RESULTS_DIR / "models" / f"dp_fl_eps{tag}.pt"
+        model_map[str(eps)] = (
+            RESULTS_DIR / "models" / f"dp_fl_eps{tag}.pt",
+            RESULTS_DIR / "tables" / f"exp3_dp_fl_eps{tag}.json",
+        )
 
-    for label, path in model_map.items():
+    for label, (path, results_path) in model_map.items():
         if not path.exists():
             print(f"  [skip] {label} — {path.name} not found")
             continue
+        threshold = load_locked_threshold(results_path)
+        if threshold is None:
+            print(f"  [skip] {label} — no saved validation threshold in {results_path.name}; "
+                  f"rerun exp2/exp3 first (per-pattern recall must reuse their val-selected threshold)")
+            continue
         model = load_model(model_kwargs, path, device)
-        pf = per_pattern_recall(model, X_test, y_test, pt_test, device)
+        pf = per_pattern_recall(model, X_test, y_test, pt_test, device, threshold)
         all_results[label] = pf
-        print(f"  ε={label:8s}: {pf}")
+        print(f"  ε={label:8s} (threshold={threshold:.4f}): {pf}")
 
     # Build DataFrame: rows=patterns, cols=ε
     row_patterns = [p for p in PATTERN_TYPES if any(p in v for v in all_results.values())]

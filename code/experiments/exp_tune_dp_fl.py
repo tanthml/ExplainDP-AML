@@ -100,7 +100,7 @@ def build_clients(X_client, y_client, banks_client, model_kwargs, device, num_cl
 
 
 def main():
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     rng = np.random.default_rng(RANDOM_SEED)
 
     log("Loading data from features.parquet ...")
