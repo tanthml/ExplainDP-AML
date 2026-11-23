@@ -3,7 +3,7 @@
 Reference implementation for **"Explainable Differentially Private Federated
 Learning for Anti-Money Laundering"**, submitted to IEEE-RIVF 2026.
 
-> **Authors:** Tan Tran (corresponding), Khiem Nguyen, Nhan Dang, An Mai,
+> **Authors:** Tan Tran (corresponding), Khiem Manh Nguyen, Nhan Dang, An Mai,
 > Thinh Pham — College of Engineering and Computer Science, VinUniversity,
 > Hanoi, Vietnam.
 
@@ -58,6 +58,10 @@ python3 preprocessing/03_feature_engineering.py  # -> data/features.parquet
 ## Experiments
 
 All experiments use `--fast` (loads the precomputed `features.parquet`).
+Every script's `--device` flag defaults to CUDA when a GPU is available
+and falls back to CPU automatically otherwise, so the commands below run
+unmodified either way; pass `--device cpu` or `--device cuda` explicitly
+to override.
 
 ```bash
 cd code
@@ -82,6 +86,41 @@ python3 explainability/shap_analysis.py --fast --n-explain 200
 # Reproduce all figures and tables
 python3 results/plot_results.py
 ```
+
+### Ablations (optional)
+
+Additional experiments backing the paper's ablation study (FedProx,
+SCAFFOLD, sampling/loss variants, extended metrics, LI-Small transfer):
+
+```bash
+cd code
+
+# FedProx (mu sweep) + sampling/loss ablations + SCAFFOLD, seeds 18/19/20
+./run_gpu_ablations.sh
+
+# Camera-ready rerun across seeds 18/19/20 (exp2 + exp3 + exp4)
+./rerun_camera_ready.sh
+
+# Local-only (no federation) baseline
+python3 experiments/exp2b_local_only.py --fast --rounds 20
+
+# SCAFFOLD on its own
+python3 experiments/exp2c_scaffold.py --fast --rounds 20
+
+# Extended metrics (PR-AUC, calibration, etc.) over saved checkpoints
+python3 experiments/exp5_extended_metrics.py --fast
+
+# LI-Small cross-dataset validation (saved models evaluated on LI-Small)
+python3 experiments/exp5_li_small.py --train data/HI-Small_Trans.csv \
+    --test data/LI-Small_Trans.csv --patterns-test data/LI-Small_Patterns.txt
+
+# LI-Small zero-shot transfer
+python3 experiments/exp6_li_small_transfer.py
+```
+
+Despite the script names, both shell scripts pick up GPU automatically
+when available and fall back to CPU otherwise — "gpu" in the filename
+just reflects how they were originally run for the paper.
 
 Splitting throughout is group-aware: `grouped_train_test_split` in
 `preprocessing/utils.py` wraps `GroupShuffleSplit` on the `group_id` column

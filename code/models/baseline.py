@@ -17,6 +17,7 @@ from sklearn.preprocessing import label_binarize
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import HIDDEN_DIMS, DROPOUT, BATCH_SIZE, LEARNING_RATE, RANDOM_SEED
 from models.mlp import MLP
+from preprocessing.utils import select_f1_threshold
 
 
 def make_class_weights(y: np.ndarray, device: torch.device) -> torch.Tensor:
@@ -78,30 +79,31 @@ def train_mlp(
     return model, best_val_f1
 
 
-def evaluate_model(model: nn.Module, X: np.ndarray, y: np.ndarray, device_str: str = "cpu") -> dict:
-    import numpy as np_inner
+def evaluate_model(model: nn.Module, X: np.ndarray, y: np.ndarray, device_str: str = "cpu",
+                    threshold: float = None) -> dict:
+    """Evaluate at a fixed threshold, or select one via the PR curve if none is given.
+
+    Pass `threshold=None` on a validation split to select it, then pass the
+    returned value back in as `threshold` on the test split -- selecting on
+    the test split itself leaks test labels into the reported number.
+    """
     device = torch.device(device_str)
     model.eval()
     with torch.no_grad():
         logits = model(torch.tensor(X, dtype=torch.float32).to(device))
         probs = torch.softmax(logits, dim=1).cpu().numpy()
 
-    from sklearn.metrics import precision_recall_curve
-
     scores = probs[:, 1]
     auc = roc_auc_score(y, scores) if len(np.unique(y)) == 2 else 0.0
 
-    # Threshold-optimized F1 via PR curve — O(n log n), avoids O(200n) scan loop.
-    prec, rec, thresh = precision_recall_curve(y, scores)
-    f1_cls1 = np_inner.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0.0)
-    best_idx = int(np_inner.argmax(f1_cls1))
-    best_thresh = float(thresh[best_idx]) if best_idx < len(thresh) else 0.5
+    if threshold is None:
+        threshold = select_f1_threshold(y, scores)
 
-    preds = (scores >= best_thresh).astype(int)
+    preds = (scores >= threshold).astype(int)
     best_f1 = float(f1_score(y, preds, average="macro", zero_division=0))
     report = classification_report(y, preds, zero_division=0, output_dict=True)
     return {"f1_macro": best_f1, "auc": auc, "report": report, "probs": probs, "preds": preds,
-            "threshold": best_thresh}
+            "threshold": threshold}
 
 
 def train_xgboost(X_train: np.ndarray, y_train: np.ndarray) -> object:
@@ -124,16 +126,19 @@ def train_xgboost(X_train: np.ndarray, y_train: np.ndarray) -> object:
     return clf
 
 
-def evaluate_xgboost(clf, X: np.ndarray, y: np.ndarray) -> dict:
-    from sklearn.metrics import precision_recall_curve
+def evaluate_xgboost(clf, X: np.ndarray, y: np.ndarray, threshold: float = None) -> dict:
+    """Evaluate at a fixed threshold, or select one via the PR curve if none is given.
+
+    Same test-set-leakage caveat as evaluate_model: select on validation, apply on test.
+    """
     probs = clf.predict_proba(X)[:, 1]
     auc = roc_auc_score(y, probs) if len(np.unique(y)) == 2 else 0.0
-    prec, rec, thresh = precision_recall_curve(y, probs)
-    f1_cls1 = np.where(prec + rec > 0, 2 * prec * rec / (prec + rec), 0.0)
-    best_idx = int(np.argmax(f1_cls1))
-    best_thresh = float(thresh[best_idx]) if best_idx < len(thresh) else 0.5
-    preds = (probs >= best_thresh).astype(int)
+
+    if threshold is None:
+        threshold = select_f1_threshold(y, probs)
+
+    preds = (probs >= threshold).astype(int)
     f1 = f1_score(y, preds, average="macro", zero_division=0)
     report = classification_report(y, preds, zero_division=0, output_dict=True)
     return {"f1_macro": f1, "auc": auc, "report": report, "probs": probs, "preds": preds,
-            "threshold": best_thresh}
+            "threshold": threshold}
